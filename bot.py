@@ -1,31 +1,38 @@
 import os
 import logging
+import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
+
+# HTTP-сервер для Render
+from fastapi import FastAPI
+from uvicorn import Config, Server
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-# Получаем токен и ID администратора из переменных окружения
+# Переменные окружения
 API_TOKEN = os.getenv("API_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 
 if not API_TOKEN or not ADMIN_CHAT_ID:
     raise ValueError("Необходимо указать API_TOKEN и ADMIN_CHAT_ID в переменных окружения.")
 
-# Инициализация бота и диспетчера
+# Инициализация бота
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
+# === Обработчики Telegram ===
+
 @dp.message(Command("start"))
 async def send_welcome(message: types.Message):
-    await message.answer("Привет! Это бот обратной связи. Просто отправьте мне сообщение, и оно будет переслано администратору.")
+    await message.answer("Привет! Это бот обратной связи. Отправьте сообщение — оно уйдёт администратору.")
 
 @dp.message()
 async def handle_message(message: types.Message):
     user = message.from_user
 
-    # Формируем HTML-ссылку на пользователя
+    # Формируем HTML-ссылку
     if user.username:
         user_link = f'<a href="https://t.me/{user.username}">{user.first_name}</a>'
     else:
@@ -69,19 +76,44 @@ async def handle_message(message: types.Message):
                 parse_mode="HTML"
             )
         else:
-            await message.reply("Извините, я поддерживаю только текст, фото, видео, GIF и документы.")
+            await message.reply("❌ Поддерживаются только текст, фото, видео, GIF и документы.")
             return
 
-        # Подтверждение пользователю
         await message.reply("✅ Ваше сообщение отправлено администратору!")
 
     except Exception as e:
-        logging.error(f"Ошибка при пересылке сообщения: {e}")
-        await message.reply("❌ Не удалось отправить сообщение. Попробуйте позже.")
+        logging.error(f"Ошибка при пересылке: {e}")
+        await message.reply("⚠️ Не удалось отправить сообщение. Попробуйте позже.")
+
+# === HTTP-сервер для Render ===
+
+app = FastAPI()
+
+@app.get("/")
+async def health_check():
+    """Endpoint для Render — показывает, что сервис жив."""
+    return {"status": "ok", "message": "Telegram feedback bot is running"}
+
+async def start_http_server():
+    """Запускает HTTP-сервер на порту, указанном в переменной PORT (Render её задаёт автоматически)."""
+    port = int(os.getenv("PORT", 8000))
+    config = Config(app=app, host="0.0.0.0", port=port, log_level="info")
+    server = Server(config)
+    await server.serve()
+
+# === Основная функция ===
 
 async def main():
+    logging.info("Запуск бота и HTTP-сервера...")
+
+    # Запускаем HTTP-сервер в фоне
+    http_task = asyncio.create_task(start_http_server())
+
+    # Запускаем Telegram polling
     await dp.start_polling(bot)
 
+    # Ожидаем завершения (на случай graceful shutdown)
+    await http_task
+
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
