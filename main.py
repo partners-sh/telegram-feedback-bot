@@ -1,76 +1,87 @@
-from flask import Flask, request, jsonify
-import requests
 import os
+import logging
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
 
-app = Flask(__name__)
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
 
-# Получаем переменные окружения
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
+# Получаем токен и ID администратора из переменных окружения
+API_TOKEN = os.getenv("API_TOKEN")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 
-if not BOT_TOKEN or not ADMIN_ID:
-    raise ValueError("BOT_TOKEN или ADMIN_ID не установлены!")
+if not API_TOKEN or not ADMIN_CHAT_ID:
+    raise ValueError("Необходимо указать API_TOKEN и ADMIN_CHAT_ID в переменных окружения.")
 
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+# Инициализация бота и диспетчера
+bot = Bot(token=API_TOKEN)
+dp = Dispatcher()
 
-@app.route("/", methods=["GET"])
-def home():
-    return "✅ Telegram Feedback Bot is running!"
+@dp.message(Command("start"))
+async def send_welcome(message: types.Message):
+    await message.answer("Привет! Это бот обратной связи. Просто отправьте мне сообщение, и оно будет переслано администратору.")
 
-@app.route("/webhook", methods=["GET", "POST"])
-def telegram_webhook():
-    print("🔹 Запрос получен:", request.method)
+@dp.message()
+async def handle_message(message: types.Message):
+    user = message.from_user
 
-    if request.method == "GET":
-        return "Webhook endpoint is ready for POST requests.", 200
+    # Формируем HTML-ссылку на пользователя
+    if user.username:
+        user_link = f'<a href="https://t.me/{user.username}">{user.first_name}</a>'
+    else:
+        user_link = f'<a href="tg://user?id={user.id}">{user.first_name}</a>'
+
+    base_caption = f"📩 Новое сообщение от {user_link} (ID: {user.id})"
 
     try:
-        data = request.get_json()
-        if not data:
-            print("❌ Пустой JSON")
-            return jsonify({"ok": True})
+        if message.text:
+            await bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=f"{base_caption}\n\n{message.text}",
+                parse_mode="HTML"
+            )
+        elif message.photo:
+            await bot.send_photo(
+                chat_id=ADMIN_CHAT_ID,
+                photo=message.photo[-1].file_id,
+                caption=f"{base_caption}\n\n{message.caption or ''}",
+                parse_mode="HTML"
+            )
+        elif message.video:
+            await bot.send_video(
+                chat_id=ADMIN_CHAT_ID,
+                video=message.video.file_id,
+                caption=f"{base_caption}\n\n{message.caption or ''}",
+                parse_mode="HTML"
+            )
+        elif message.animation:  # GIF
+            await bot.send_animation(
+                chat_id=ADMIN_CHAT_ID,
+                animation=message.animation.file_id,
+                caption=f"{base_caption}\n\n{message.caption or ''}",
+                parse_mode="HTML"
+            )
+        elif message.document:
+            await bot.send_document(
+                chat_id=ADMIN_CHAT_ID,
+                document=message.document.file_id,
+                caption=f"{base_caption}\n\n{message.caption or ''}",
+                parse_mode="HTML"
+            )
+        else:
+            await message.reply("Извините, я поддерживаю только текст, фото, видео, GIF и документы.")
+            return
 
-        if "message" not in data:
-            print("❌ Нет сообщения в данных")
-            return jsonify({"ok": True})
-
-        message = data["message"]
-        user_id = message["from"]["id"]
-        chat_id = message["chat"]["id"]
-
-        # Если пишет админ — пытаемся ответить пользователю
-        if str(user_id) == str(ADMIN_ID):
-            if "reply_to_message" in message and "text" in message["reply_to_message"]:
-                replied_text = message["reply_to_message"]["text"]
-                if replied_text.startswith("📩 От "):
-                    try:
-                        target_user = replied_text.split()[2]
-                        reply_text = message.get("text", "Сообщение без текста")
-                        print(f"📤 Ответ пользователю {target_user}: {reply_text}")
-                        requests.post(f"{TELEGRAM_API}/sendMessage", json={
-                            "chat_id": target_user,
-                            "text": reply_text
-                        })
-                    except Exception as e:
-                        print("❌ Ошибка при отправке ответа:", e)
-            return jsonify({"ok": True})
-
-        # Иначе — пересылаем админу
-        text = message.get("text", "📎 Медиа/нестандартное сообщение")
-        print(f"📥 Сообщение от {user_id}: {text}")
-
-        requests.post(f"{TELEGRAM_API}/sendMessage", json={
-            "chat_id": ADMIN_ID,
-            "text": f"📩 От {user_id}\n{text}",
-            "reply_markup": {"force_reply": True}
-        })
+        # Подтверждение пользователю
+        await message.reply("✅ Ваше сообщение отправлено администратору!")
 
     except Exception as e:
-        print("❌ Ошибка в webhook:", e)
-        return jsonify({"ok": False}), 500
+        logging.error(f"Ошибка при пересылке сообщения: {e}")
+        await message.reply("❌ Не удалось отправить сообщение. Попробуйте позже.")
 
-    return jsonify({"ok": True})
-
+async def main():
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    import asyncio
+    asyncio.run(main())
