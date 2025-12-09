@@ -3,12 +3,8 @@ import logging
 import html
 import asyncio
 import re
-from aiogram import Bot, Dispatcher, types  # <-- ключевой импорт!
+from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-
-# HTTP-сервер для Render
-from fastapi import FastAPI
-from uvicorn import Config, Server
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -142,38 +138,11 @@ async def message_router(message: types.Message):
         await handle_user_message(message)
 
 
-# === HTTP-сервер для Render ===
-
-app = FastAPI()
-
-@app.get("/")
-async def health_check():
-    """Endpoint для проверки работоспособности (Render требует открытый порт)."""
-    return {"status": "ok", "service": "telegram-feedback-bot"}
-
-
-async def start_http_server():
-    """Запускает HTTP-сервер на порту, указанном Render в переменной PORT."""
-    port = int(os.getenv("PORT", 8000))
-    config = Config(app=app, host="0.0.0.0", port=port, log_level="info")
-    server = Server(config)
-    await server.serve()
-
-
 # === Запуск ===
 
 async def main():
-    logging.info("Запуск Telegram-бота и HTTP-сервера...")
-
-    # Запускаем HTTP-сервер в фоне
-    http_task = asyncio.create_task(start_http_server())
-
-    # Запускаем Telegram-поллинг
+    logging.info("Запуск Telegram-бота...")
     await dp.start_polling(bot)
-
-    # Ожидаем завершения сервера
-    await http_task
-
 
 if __name__ == "__main__":
     asyncio.run(main())
