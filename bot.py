@@ -9,8 +9,8 @@ from aiogram.filters import Command
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-# Хранилище для сопоставления сообщений
-REPLY_MAP = {}  # {admin_message_id: (user_id, user_message_id)}
+# Хранилище: {admin_message_id: (user_id, user_message_id)}
+REPLY_MAP = {}
 
 # Переменные окружения
 API_TOKEN = os.getenv("API_TOKEN")
@@ -38,13 +38,24 @@ async def handle_user_message(message: types.Message):
 
     base_info = f"📩 От: {user_link} (ID: `{user.id}`)"
 
+    # Проверяем, отвечает ли пользователь на сообщение бота
+    reply_to_admin_msg_id = None
+    if message.reply_to_message:
+        original_user_msg_id = message.reply_to_message.message_id
+        # Ищем в REPLY_MAP связку: (user_id, original_user_msg_id) → admin_msg_id
+        for admin_id, (u_id, u_msg_id) in REPLY_MAP.items():
+            if u_id == user.id and u_msg_id == original_user_msg_id:
+                reply_to_admin_msg_id = admin_id
+                break
+
     try:
         if message.text:
             safe_text = html.escape(message.text)
             admin_msg = await bot.send_message(
                 chat_id=ADMIN_CHAT_ID,
                 text=f"{base_info}\n\n{safe_text}",
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_to_message_id=reply_to_admin_msg_id
             )
         elif message.photo:
             safe_caption = html.escape(message.caption or '') if message.caption else ''
@@ -52,7 +63,8 @@ async def handle_user_message(message: types.Message):
                 chat_id=ADMIN_CHAT_ID,
                 photo=message.photo[-1].file_id,
                 caption=f"{base_info}\n\n{safe_caption}",
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_to_message_id=reply_to_admin_msg_id
             )
         elif message.video:
             safe_caption = html.escape(message.caption or '') if message.caption else ''
@@ -60,7 +72,8 @@ async def handle_user_message(message: types.Message):
                 chat_id=ADMIN_CHAT_ID,
                 video=message.video.file_id,
                 caption=f"{base_info}\n\n{safe_caption}",
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_to_message_id=reply_to_admin_msg_id
             )
         elif message.animation:
             safe_caption = html.escape(message.caption or '') if message.caption else ''
@@ -68,7 +81,8 @@ async def handle_user_message(message: types.Message):
                 chat_id=ADMIN_CHAT_ID,
                 animation=message.animation.file_id,
                 caption=f"{base_info}\n\n{safe_caption}",
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_to_message_id=reply_to_admin_msg_id
             )
         elif message.document:
             safe_caption = html.escape(message.caption or '') if message.caption else ''
@@ -76,13 +90,14 @@ async def handle_user_message(message: types.Message):
                 chat_id=ADMIN_CHAT_ID,
                 document=message.document.file_id,
                 caption=f"{base_info}\n\n{safe_caption}",
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_to_message_id=reply_to_admin_msg_id
             )
         else:
             await message.reply("❌ Поддерживаются только текст, фото, видео, GIF и документы.")
             return
 
-        # Сохраняем связку
+        # Сохраняем связку для ответа админа
         REPLY_MAP[admin_msg.message_id] = (user.id, message.message_id)
         await message.reply("✅ Ваше сообщение отправлено администратору!")
 
@@ -162,7 +177,7 @@ async def message_router(message: types.Message):
 
 
 async def main():
-    logging.info("Запуск бота с поддержкой цитирования...")
+    logging.info("Запуск бота с двусторонним цитированием...")
     await dp.start_polling(bot)
 
 
