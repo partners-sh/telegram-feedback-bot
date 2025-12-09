@@ -9,28 +9,34 @@ from aiogram.filters import Command
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-# Хранилище: {admin_message_id: (user_id, user_message_id)}
+# Хранилища для сопоставления сообщений
+# admin_message_id → (user_id, user_message_id)
 REPLY_MAP = {}
+# (user_id, user_message_id) → admin_message_id
+USER_TO_ADMIN_MAP = {}
 
 # Переменные окружения
 API_TOKEN = os.getenv("API_TOKEN")
 try:
     ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
 except (TypeError, ValueError):
-    raise ValueError("ADMIN_CHAT_ID должен быть целым числом.")
+    raise ValueError("ADMIN_CHAT_ID должен быть целым числом (ID чата или пользователя).")
 
 if not API_TOKEN:
-    raise ValueError("API_TOKEN не задан.")
+    raise ValueError("API_TOKEN не задан в переменных окружения.")
 
+# Инициализация бота
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
 
 async def handle_user_message(message: types.Message):
+    """Обработка сообщений от пользователей с поддержкой цитирования."""
     user = message.from_user
     full_name = user.full_name or "Пользователь"
     escaped_name = html.escape(full_name)
 
+    # Кликабельная ссылка на профиль
     if user.username:
         user_link = f'<a href="https://t.me/{user.username}">{escaped_name}</a>'
     else:
@@ -42,11 +48,9 @@ async def handle_user_message(message: types.Message):
     reply_to_admin_msg_id = None
     if message.reply_to_message:
         original_user_msg_id = message.reply_to_message.message_id
-        # Ищем в REPLY_MAP связку: (user_id, original_user_msg_id) → admin_msg_id
-        for admin_id, (u_id, u_msg_id) in REPLY_MAP.items():
-            if u_id == user.id and u_msg_id == original_user_msg_id:
-                reply_to_admin_msg_id = admin_id
-                break
+        key = (user.id, original_user_msg_id)
+        if key in USER_TO_ADMIN_MAP:
+            reply_to_admin_msg_id = USER_TO_ADMIN_MAP[key]
 
     try:
         if message.text:
@@ -75,7 +79,7 @@ async def handle_user_message(message: types.Message):
                 parse_mode="HTML",
                 reply_to_message_id=reply_to_admin_msg_id
             )
-        elif message.animation:
+        elif message.animation:  # GIF
             safe_caption = html.escape(message.caption or '') if message.caption else ''
             admin_msg = await bot.send_animation(
                 chat_id=ADMIN_CHAT_ID,
@@ -97,16 +101,19 @@ async def handle_user_message(message: types.Message):
             await message.reply("❌ Поддерживаются только текст, фото, видео, GIF и документы.")
             return
 
-        # Сохраняем связку для ответа админа
+        # Сохраняем связки в оба направления
         REPLY_MAP[admin_msg.message_id] = (user.id, message.message_id)
+        USER_TO_ADMIN_MAP[(user.id, message.message_id)] = admin_msg.message_id
+
         await message.reply("✅ Ваше сообщение отправлено администратору!")
 
     except Exception as e:
-        logging.error(f"Ошибка: {e}")
-        await message.reply("⚠️ Не удалось отправить сообщение.")
+        logging.error(f"Ошибка при пересылке от пользователя: {e}")
+        await message.reply("⚠️ Не удалось отправить сообщение. Попробуйте позже.")
 
 
 async def handle_admin_reply(message: types.Message):
+    """Обработка ответов от администратора с цитированием."""
     reply_to = message.reply_to_message
     if not reply_to:
         return
@@ -153,15 +160,17 @@ async def handle_admin_reply(message: types.Message):
                 reply_to_message_id=user_message_id
             )
         else:
-            await message.reply("❌ Этот тип ответа не поддерживается.")
+            await message.reply("❌ Этот тип ответа пока не поддерживается.")
             return
 
-        await message.reply("✅ Ответ отправлен с цитированием!")
+        await message.reply("✅ Ответ отправлен пользователю с цитированием!")
 
     except Exception as e:
-        logging.error(f"Ошибка отправки ответа: {e}")
-        await message.reply("❌ Не удалось доставить ответ.")
+        logging.error(f"Ошибка при отправке ответа: {e}")
+        await message.reply("❌ Не удалось доставить ответ этому пользователю.")
 
+
+# === Обработчики ===
 
 @dp.message(Command("start"))
 async def send_welcome(message: types.Message):
@@ -170,14 +179,17 @@ async def send_welcome(message: types.Message):
 
 @dp.message()
 async def message_router(message: types.Message):
+    """Маршрутизатор сообщений."""
     if message.from_user.id == ADMIN_CHAT_ID and message.reply_to_message:
         await handle_admin_reply(message)
     else:
         await handle_user_message(message)
 
 
+# === Запуск ===
+
 async def main():
-    logging.info("Запуск бота с двусторонним цитированием...")
+    logging.info("Запуск Telegram-бота с двусторонним цитированием...")
     await dp.start_polling(bot)
 
 
