@@ -9,48 +9,46 @@ from aiogram.filters import Command
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
+# Хранилище для сопоставления сообщений
+REPLY_MAP = {}  # {admin_message_id: (user_id, user_message_id)}
+
 # Переменные окружения
 API_TOKEN = os.getenv("API_TOKEN")
 try:
     ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
 except (TypeError, ValueError):
-    raise ValueError("ADMIN_CHAT_ID должен быть целым числом (ID чата или пользователя).")
+    raise ValueError("ADMIN_CHAT_ID должен быть целым числом.")
 
 if not API_TOKEN:
-    raise ValueError("API_TOKEN не задан в переменных окружения.")
+    raise ValueError("API_TOKEN не задан.")
 
-# Инициализация бота
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
-# === Вспомогательные функции ===
 
 async def handle_user_message(message: types.Message):
-    """Обработка сообщений от обычных пользователей."""
     user = message.from_user
     full_name = user.full_name or "Пользователь"
     escaped_name = html.escape(full_name)
 
-    # Формируем кликабельную ссылку
     if user.username:
         user_link = f'<a href="https://t.me/{user.username}">{escaped_name}</a>'
     else:
         user_link = f'<a href="tg://user?id={user.id}">{escaped_name}</a>'
 
-    # ID в обратных кавычках для парсинга при ответе
     base_info = f"📩 От: {user_link} (ID: `{user.id}`)"
 
     try:
         if message.text:
             safe_text = html.escape(message.text)
-            await bot.send_message(
+            admin_msg = await bot.send_message(
                 chat_id=ADMIN_CHAT_ID,
                 text=f"{base_info}\n\n{safe_text}",
                 parse_mode="HTML"
             )
         elif message.photo:
             safe_caption = html.escape(message.caption or '') if message.caption else ''
-            await bot.send_photo(
+            admin_msg = await bot.send_photo(
                 chat_id=ADMIN_CHAT_ID,
                 photo=message.photo[-1].file_id,
                 caption=f"{base_info}\n\n{safe_caption}",
@@ -58,15 +56,15 @@ async def handle_user_message(message: types.Message):
             )
         elif message.video:
             safe_caption = html.escape(message.caption or '') if message.caption else ''
-            await bot.send_video(
+            admin_msg = await bot.send_video(
                 chat_id=ADMIN_CHAT_ID,
                 video=message.video.file_id,
                 caption=f"{base_info}\n\n{safe_caption}",
                 parse_mode="HTML"
             )
-        elif message.animation:  # GIF
+        elif message.animation:
             safe_caption = html.escape(message.caption or '') if message.caption else ''
-            await bot.send_animation(
+            admin_msg = await bot.send_animation(
                 chat_id=ADMIN_CHAT_ID,
                 animation=message.animation.file_id,
                 caption=f"{base_info}\n\n{safe_caption}",
@@ -74,7 +72,7 @@ async def handle_user_message(message: types.Message):
             )
         elif message.document:
             safe_caption = html.escape(message.caption or '') if message.caption else ''
-            await bot.send_document(
+            admin_msg = await bot.send_document(
                 chat_id=ADMIN_CHAT_ID,
                 document=message.document.file_id,
                 caption=f"{base_info}\n\n{safe_caption}",
@@ -84,51 +82,71 @@ async def handle_user_message(message: types.Message):
             await message.reply("❌ Поддерживаются только текст, фото, видео, GIF и документы.")
             return
 
+        # Сохраняем связку
+        REPLY_MAP[admin_msg.message_id] = (user.id, message.message_id)
         await message.reply("✅ Ваше сообщение отправлено администратору!")
 
     except Exception as e:
-        logging.error(f"Ошибка при пересылке от пользователя: {e}")
-        await message.reply("⚠️ Не удалось отправить сообщение. Попробуйте позже.")
+        logging.error(f"Ошибка: {e}")
+        await message.reply("⚠️ Не удалось отправить сообщение.")
 
 
 async def handle_admin_reply(message: types.Message):
-    """Обработка ответов от администратора на пересланные сообщения."""
-    reply_msg = message.reply_to_message
-    if not reply_msg:
+    reply_to = message.reply_to_message
+    if not reply_to:
         return
 
-    # Ищем ID в тексте или подписи сообщения, которое админ цитирует
-    text_to_search = (reply_msg.text or reply_msg.caption or "")
-    match = re.search(r"ID:\s*`(\d+)`", text_to_search)
-    if not match:
-        await message.reply("⚠️ Не удалось найти ID пользователя в пересланном сообщении.")
+    if reply_to.message_id not in REPLY_MAP:
+        await message.reply("⚠️ Не найдено исходное сообщение для ответа.")
         return
+
+    user_id, user_message_id = REPLY_MAP[reply_to.message_id]
 
     try:
-        user_id = int(match.group(1))
-        # Отправляем ответ пользователю
         if message.text:
-            await bot.send_message(user_id, f"📩 Ответ от администратора:\n\n{message.text}")
+            await bot.send_message(
+                user_id,
+                f"📩 Ответ от администратора:\n\n{message.text}",
+                reply_to_message_id=user_message_id
+            )
         elif message.photo:
-            await bot.send_photo(user_id, message.photo[-1].file_id, caption=message.caption or "")
+            await bot.send_photo(
+                user_id,
+                message.photo[-1].file_id,
+                caption=message.caption or "",
+                reply_to_message_id=user_message_id
+            )
         elif message.video:
-            await bot.send_video(user_id, message.video.file_id, caption=message.caption or "")
+            await bot.send_video(
+                user_id,
+                message.video.file_id,
+                caption=message.caption or "",
+                reply_to_message_id=user_message_id
+            )
         elif message.animation:
-            await bot.send_animation(user_id, message.animation.file_id, caption=message.caption or "")
+            await bot.send_animation(
+                user_id,
+                message.animation.file_id,
+                caption=message.caption or "",
+                reply_to_message_id=user_message_id
+            )
         elif message.document:
-            await bot.send_document(user_id, message.document.file_id, caption=message.caption or "")
+            await bot.send_document(
+                user_id,
+                message.document.file_id,
+                caption=message.caption or "",
+                reply_to_message_id=user_message_id
+            )
         else:
-            await message.reply("❌ Этот тип ответа пока не поддерживается.")
+            await message.reply("❌ Этот тип ответа не поддерживается.")
             return
 
-        await message.reply("✅ Ответ отправлен пользователю!")
+        await message.reply("✅ Ответ отправлен с цитированием!")
 
     except Exception as e:
-        logging.error(f"Ошибка при отправке ответа: {e}")
-        await message.reply("❌ Не удалось доставить ответ этому пользователю (возможно, он заблокировал бота).")
+        logging.error(f"Ошибка отправки ответа: {e}")
+        await message.reply("❌ Не удалось доставить ответ.")
 
-
-# === Обработчики ===
 
 @dp.message(Command("start"))
 async def send_welcome(message: types.Message):
@@ -137,17 +155,14 @@ async def send_welcome(message: types.Message):
 
 @dp.message()
 async def message_router(message: types.Message):
-    """Маршрутизатор: определяет, от кого сообщение — и вызывает нужный обработчик."""
     if message.from_user.id == ADMIN_CHAT_ID and message.reply_to_message:
         await handle_admin_reply(message)
     else:
         await handle_user_message(message)
 
 
-# === Запуск ===
-
 async def main():
-    logging.info("Запуск Telegram-бота как Background Worker...")
+    logging.info("Запуск бота с поддержкой цитирования...")
     await dp.start_polling(bot)
 
 
