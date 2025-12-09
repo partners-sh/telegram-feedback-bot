@@ -31,8 +31,14 @@ async def handle_user_message(message: types.Message):
     full_name = user.full_name or "Пользователь"
     escaped_name = html.escape(full_name)
 
-    # Формат: ID в обратных кавычках — легко парсится регуляркой
-    base_info = f"📩 От: {escaped_name} (ID: `{user.id}`)"
+    # Формируем кликабельную ссылку
+    if user.username:
+        user_link = f'<a href="https://t.me/{user.username}">{escaped_name}</a>'
+    else:
+        user_link = f'<a href="tg://user?id={user.id}">{escaped_name}</a>'
+
+    # ID в обратных кавычках для парсинга при ответе
+    base_info = f"📩 От: {user_link} (ID: `{user.id}`)"
 
     try:
         if message.text:
@@ -141,8 +147,9 @@ async def message_router(message: types.Message):
 # === Запуск ===
 
 async def main():
-    logging.info("Запуск Telegram-бота...")
+    logging.info("Запуск Telegram-бота как Background Worker...")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
